@@ -15,6 +15,8 @@ describes how they are made.
 - On some Rokus, lists no longer skip presses, such as Down through a
   season's episodes, and pages no longer stall on Loading or say the
   server can't be reached while it can.
+- Home's rows scroll to the row you move to, and on some Rokus the title
+  you're on in a row is highlighted again.
 
 ## [0.1.8] - 2026-11-12
 
