@@ -46,6 +46,8 @@ end function
 function uiRequest(spec as object, callback as string) as object
     request = CreateObject("roSGNode", "ApiRequest")
     request.spec = spec
+    if m.uiDevice = invalid then m.uiDevice = CreateObject("roDeviceInfo")
+    request.ticket = m.uiDevice.GetRandomUUID()
     if callback <> "" then request.observeField("result", callback)
     m.global.api.request = request
     return request
