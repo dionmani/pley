@@ -403,7 +403,9 @@ function LivePlayer({
       if (cancelled) return true;
       // What the server says goes; not known in time, what the stream turned out to be.
       if (failed || (known ? !playsAsSent(known) : !hasPlayableTracks(player))) {
-        player.destroy();
+        // Failed, it was let go already: mpegts.js throws when let go twice,
+        // and the transcoder's segments would never be played.
+        if (!failed) player.destroy();
         if (directRef.current === player) directRef.current = null;
         return false;
       }

@@ -48,9 +48,48 @@ const { FakeHls, hlsInstances } = vi.hoisted(() => {
   return { FakeHls, hlsInstances };
 });
 
+/**
+ * A stand-in for mpegts.js's player, as Chrome's goes with a channel whose
+ * audio it can't play (AC-3): it fails as it loads, and throws when let go
+ * twice, as the real one does.
+ */
+const { FakeMpegts, mpegtsPlayers, mpegtsLoader } = vi.hoisted(() => {
+  const mpegtsPlayers: FakeMpegtsPlayer[] = [];
+  class FakeMpegtsPlayer {
+    readonly calls: string[] = [];
+    private readonly handlers = new Map<string, () => void>();
+    private engine: object | null = {};
+    constructor() {
+      mpegtsPlayers.push(this);
+    }
+    on(event: string, handler: () => void) {
+      this.handlers.set(event, handler);
+    }
+    attachMediaElement() {
+      this.calls.push("attachMediaElement");
+    }
+    load() {
+      this.calls.push("load");
+      this.handlers.get("error")?.();
+    }
+    destroy() {
+      if (!this.engine) throw new TypeError("Cannot read properties of null (reading 'destroy')");
+      this.engine = null;
+      this.calls.push("destroy");
+    }
+  }
+  const FakeMpegts = {
+    isSupported: () => true,
+    Events: { ERROR: "error" },
+    createPlayer: () => new FakeMpegtsPlayer(),
+  };
+  // No MPEG-TS player unless a test gives one: every channel plays from the transcoder's HLS.
+  const mpegtsLoader = { load: (): Promise<unknown> => Promise.reject(new Error("not here")) };
+  return { FakeMpegts, mpegtsPlayers, mpegtsLoader };
+});
+
 vi.mock("@/lib/hls", () => ({ loadHls: () => Promise.resolve(FakeHls) }));
-// No MPEG-TS player: every channel plays from the transcoder's HLS.
-vi.mock("@/lib/mpegts", () => ({ loadMpegts: () => Promise.reject(new Error("not here")) }));
+vi.mock("@/lib/mpegts", () => ({ loadMpegts: () => mpegtsLoader.load() }));
 
 const news: Channel = {
   id: 5,
@@ -203,6 +242,38 @@ describe("LivePlayerPage, its connection taken over", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Live TV stopped");
     expect(alert).toHaveTextContent("Watching moved to Sport on another device.");
+  });
+});
+
+describe("LivePlayerPage, a channel the browser can't play as sent", () => {
+  beforeEach(() => {
+    hlsInstances.length = 0;
+    mpegtsPlayers.length = 0;
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("MediaSource", class {});
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    mpegtsLoader.load = () => Promise.reject(new Error("not here"));
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("plays the transcoder's segments when its stream fails", async () => {
+    mpegtsLoader.load = () => Promise.resolve(FakeMpegts);
+    mockApi({
+      "GET /api/live/channels/5": () => news,
+      "POST /api/live/channels/5/watch": () => ({ session_id: "s1", url: "/api/live/sessions/s1/index.m3u8", kind: "hls", channel: news }),
+      // A broadcast channel: MPEG-2 and AC-3, made into H.264 and AAC.
+      "GET /api/live/sessions/s1/plan": () => ({ video_codec: "mpeg2video", audio_codec: "ac3", video: "h264", audio: "aac" }),
+      "DELETE /api/live/sessions/s1": () => undefined,
+    });
+    renderWithProviders(<PlayerWithEvents />, { route: "/live/5" });
+    await waitFor(() => expect(hlsInstances[0]?.calls).toEqual(["loadSource /api/live/sessions/s1/index.m3u8", "attachMedia"]));
+    expect(mpegtsPlayers[0]?.calls).toEqual(["attachMediaElement", "load", "destroy"]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 

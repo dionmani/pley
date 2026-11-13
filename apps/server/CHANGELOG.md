@@ -42,6 +42,11 @@ describes how they are made.
 - Home and a library's page show a new library's titles as its files are
   read.
 
+### Fixed
+
+- In the browser and the desktop app, Live TV channels with AC-3 audio,
+  such as US broadcast channels, play instead of tuning forever.
+
 ## [0.1.10] - 2026-11-12
 
 ### Added
