@@ -50,12 +50,13 @@ const { FakeHls, hlsInstances } = vi.hoisted(() => {
 
 /**
  * A stand-in for mpegts.js's player, as Chrome's goes with a channel whose
- * audio it can't play (AC-3): it fails as it loads, and throws when let go
- * twice, as the real one does.
+ * audio it can't play (AC-3): it fails as it loads (or, with `failsAsItLoads`
+ * off, when `fail` says), and throws when let go twice, as the real one does.
  */
 const { FakeMpegts, mpegtsPlayers, mpegtsLoader } = vi.hoisted(() => {
   const mpegtsPlayers: FakeMpegtsPlayer[] = [];
   class FakeMpegtsPlayer {
+    static failsAsItLoads = true;
     readonly calls: string[] = [];
     private readonly handlers = new Map<string, () => void>();
     private engine: object | null = {};
@@ -70,6 +71,9 @@ const { FakeMpegts, mpegtsPlayers, mpegtsLoader } = vi.hoisted(() => {
     }
     load() {
       this.calls.push("load");
+      if (FakeMpegtsPlayer.failsAsItLoads) this.fail();
+    }
+    fail() {
       this.handlers.get("error")?.();
     }
     destroy() {
@@ -79,6 +83,7 @@ const { FakeMpegts, mpegtsPlayers, mpegtsLoader } = vi.hoisted(() => {
     }
   }
   const FakeMpegts = {
+    Player: FakeMpegtsPlayer,
     isSupported: () => true,
     Events: { ERROR: "error" },
     createPlayer: () => new FakeMpegtsPlayer(),
@@ -257,6 +262,7 @@ describe("LivePlayerPage, a channel the browser can't play as sent", () => {
   });
   afterEach(() => {
     mpegtsLoader.load = () => Promise.reject(new Error("not here"));
+    FakeMpegts.Player.failsAsItLoads = true;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -274,6 +280,58 @@ describe("LivePlayerPage, a channel the browser can't play as sent", () => {
     await waitFor(() => expect(hlsInstances[0]?.calls).toEqual(["loadSource /api/live/sessions/s1/index.m3u8", "attachMedia"]));
     expect(mpegtsPlayers[0]?.calls).toEqual(["attachMediaElement", "load", "destroy"]);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("plays the transcoder's segments when its stream fails before its first picture", async () => {
+    mpegtsLoader.load = () => Promise.resolve(FakeMpegts);
+    FakeMpegts.Player.failsAsItLoads = false;
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    let n = 0;
+    const requests = mockApi({
+      "GET /api/live/channels/5": () => news,
+      "POST /api/live/channels/5/watch": () => {
+        n++;
+        return { session_id: `s${n}`, url: `/api/live/sessions/s${n}/index.m3u8`, kind: "hls", channel: news };
+      },
+      // H.264 and AAC: the server says it's sent as it is, before the stream breaks off.
+      "GET /api/live/sessions/s1/plan": () => ({ video_codec: "h264", audio_codec: "aac", video: "copy", audio: "copy" }),
+      "DELETE /api/live/sessions/s1": () => undefined,
+      "DELETE /api/live/sessions/s2": () => undefined,
+    });
+    renderWithProviders(<PlayerWithEvents />, { route: "/live/5" });
+    await waitFor(() => expect(play).toHaveBeenCalled());
+    expect(hlsInstances).toHaveLength(0);
+
+    act(() => mpegtsPlayers[0]?.fail());
+    await waitFor(() => expect(hlsInstances[0]?.calls).toContain("loadSource /api/live/sessions/s2/index.m3u8"), {
+      timeout: 3000,
+    });
+    expect(mpegtsPlayers[0]?.calls).toEqual(["attachMediaElement", "load", "destroy"]);
+    expect(watches(requests)).toHaveLength(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("stays stopped when watching ends before the server says what the channel is", async () => {
+    mpegtsLoader.load = () => Promise.resolve(FakeMpegts);
+    FakeMpegts.Player.failsAsItLoads = false;
+    let sendPlan: (plan: unknown) => void = () => undefined;
+    const requests = mockApi({
+      "GET /api/live/channels/5": () => news,
+      "POST /api/live/channels/5/watch": () => ({ session_id: "s1", url: "/api/live/sessions/s1/index.m3u8", kind: "hls", channel: news }),
+      "GET /api/live/sessions/s1/plan": () => new Promise((resolve) => (sendPlan = resolve)),
+    });
+    renderWithProviders(<PlayerWithEvents />, { route: "/live/5" });
+    await waitFor(() => expect(requests.some((r) => r.path === "/api/live/sessions/s1/plan")).toBe(true));
+
+    act(() => FakeEventSource.last?.send(takenOver(5)));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Live TV stopped");
+    // A broadcast channel, which would have played from the transcoder's segments.
+    act(() => sendPlan({ video_codec: "mpeg2video", audio_codec: "ac3", video: "h264", audio: "aac" }));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+
+    expect(mpegtsPlayers[0]?.calls).toEqual(["attachMediaElement", "load", "destroy"]);
+    expect(hlsInstances).toHaveLength(0);
+    expect(screen.getByRole("alert")).toHaveTextContent("Someone else needed");
   });
 });
 
