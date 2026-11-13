@@ -8,6 +8,11 @@ describes how they are made.
 
 ## [Unreleased]
 
+### Fixed
+
+- The remote works on the screen that opens, such as a show's Episodes,
+  where on some Rokus it kept moving the page underneath.
+
 ## [0.1.8] - 2026-11-12
 
 ### Added

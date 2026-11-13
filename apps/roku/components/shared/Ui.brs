@@ -67,6 +67,14 @@ function uiHttpAgent(withToken = true as boolean) as object
     return agent
 end function
 
+' Puts a ButtonGroup's highlight back on index once its buttons changed.
+' On a Roku, focusButton gives the group the focus too: set where the group
+' had none (hadFocus, read before the buttons changed), it would take the
+' remote from the screen over it, or from another part of its own.
+sub uiKeepButton(group as object, index as integer, hadFocus as boolean)
+    if hadFocus and index > 0 and index < group.buttons.Count() then group.focusButton = index
+end sub
+
 ' Asks the scene for a screen: { to, params, reset, replace }, or
 ' { back: true }.
 sub uiNavigate(nav as object)
@@ -151,7 +159,8 @@ function uiNoteChange(change as object) as object
     scene = m.top.getScene()
     change.count = scene.changeCount + 1
     kept = []
-    for each earlier in scene.changes
+    ' A Roku leaves an array field unset (invalid) until something sets it.
+    for each earlier in httpArray(scene.changes)
         if earlier.count > change.count - 30 then kept.Push(earlier)
     end for
     kept.Push(change)
@@ -172,7 +181,7 @@ function uiChangesSince() as object
     scene = m.top.getScene()
     if m.changesSeen = invalid then m.changesSeen = scene.changeCount
     out = []
-    for each change in scene.changes
+    for each change in httpArray(scene.changes)
         if change.count > m.changesSeen then out.Push(change)
     end for
     m.changesSeen = scene.changeCount
